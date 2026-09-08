@@ -3,21 +3,28 @@
 
 use core::{fmt::Write, panic::PanicInfo};
 
-use crate::sbi::Console;
+use crate::{fdt::FdtPtr, sbi::Console};
 
 mod arch;
+mod fdt;
 mod init;
 mod sbi;
 mod trap;
 
 #[unsafe(no_mangle)]
-extern "C" fn start(hart_id: usize, dtb: usize) {
+extern "C" fn start(hart_id: usize, dtb: *mut u8) {
     // Safety: Running the code at the start of our kernel, and only runnig it once
     unsafe { clear_bss() };
     trap::set_trap();
 
-    let _ = writeln!(Console, "Hello, World!");
-    let _ = writeln!(Console, "Hart ID: {hart_id}, dtb ptr: {dtb:#x}");
+    let dtb = FdtPtr::from_raw_ptr(dtb).unwrap();
+
+    let _ = writeln!(Console, "Hello, World! hart_id={hart_id}");
+    let _ = writeln!(Console, "dtb={:#?}", dtb.get_header());
+
+    assert_eq!(dtb.get_magic(), FdtPtr::VALID_MAGIC, "the dtb is invalid");
+
+    dtb.structure();
 
     arch::unimp();
 
