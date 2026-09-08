@@ -50,8 +50,8 @@ unsafe fn clear_bss() {
         static mut __bss_end: usize;
     }
 
-    let start = &raw mut __bss_start;
-    let end = &raw mut __bss_end;
+    let start = &raw mut __bss_start as *mut u8;
+    let end = &raw mut __bss_end as *mut u8;
 
     let len = end as usize - start as usize;
 
