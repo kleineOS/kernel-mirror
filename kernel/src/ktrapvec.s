@@ -8,13 +8,23 @@
 # TODO: save floating point registers
 ktrapvec:
 allocspace:
-    addi sp, sp, -8*30 # -240
+    addi sp, sp, -256
 save:
     sd ra, 0(sp)
-    sd sp, 8(sp)
+
+    # preserve the original t0 before using it as scratch
+    sd t0, 32(sp)
+
+    # save the value of sp from before trap-frame allocation
+    # we use the t0 value as scratch here, to calculate the stack pointer
+    addi t0, sp, 256
+    sd t0, 8(sp)
+
     sd gp, 16(sp)
     sd tp, 24(sp)
-    sd t0, 32(sp)
+
+    # t0 saved before
+
     sd t1, 40(sp)
     sd t2, 48(sp)
     sd fp, 56(sp)
@@ -41,12 +51,14 @@ save:
     sd t4, 224(sp)
     sd t5, 232(sp)
     sd t6, 240(sp)
+
 calltrap:
     mv a0, sp
     call kerneltrap
+
 load:
     ld ra, 0(sp)
-    ld sp, 8(sp)
+
     ld gp, 16(sp)
     ld tp, 24(sp)
     ld t0, 32(sp)
@@ -76,7 +88,9 @@ load:
     ld t4, 224(sp)
     ld t5, 232(sp)
     ld t6, 240(sp)
+
 deallocspace:
-    addi sp, sp, 8*30 # 240
+    addi sp, sp, 256
+
 ret_to_supervisor:
     sret
