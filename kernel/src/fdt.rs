@@ -29,7 +29,7 @@ impl core::fmt::Display for FdtError {
     }
 }
 
-pub struct FdtPtr<'a> {
+pub struct Fdt<'a> {
     /// All the bytes which represent a flattened device tree
     dtb_bytes: &'a [u8],
     /// The header is parsed once and stored here. The same data is stored in the dtb bytes,
@@ -38,7 +38,7 @@ pub struct FdtPtr<'a> {
     header: FdtHeader,
 }
 
-impl<'a> FdtPtr<'a> {
+impl<'a> Fdt<'a> {
     pub const VALID_MAGIC: BigEndianU32<true> = BigEndianU32::new(0xd00d_feed);
 
     /// # Safety
@@ -86,9 +86,20 @@ impl<'a> FdtPtr<'a> {
                     let name_offset = bytes.read_u32();
                     let data = bytes.read_slice(len as usize);
 
-                    let name = self.get_name(name_offset);
-
-                    let _ = writeln!(Console, "FDT_PROP(name={name:?},len={len},data={data:?})");
+                    match self.get_name(name_offset) {
+                        Some(name) => {
+                            let _ = writeln!(
+                                Console,
+                                "FDT_PROP(name={name:?},len={len},data={data:?})"
+                            );
+                        }
+                        None => {
+                            let _ = writeln!(
+                                Console,
+                                "FDT_PROP(name=\"UNKNOWN\",len={len},data={data:?})"
+                            );
+                        }
+                    };
                 }
                 FDT_NOP => { /* intentionally do nothing */ }
                 FDT_END => {

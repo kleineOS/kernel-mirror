@@ -3,7 +3,7 @@
 
 use core::{fmt::Write, panic::PanicInfo};
 
-use crate::{fdt::FdtPtr, sbi::Console};
+use crate::{fdt::Fdt, sbi::Console};
 
 mod arch;
 mod fdt;
@@ -17,7 +17,7 @@ extern "C" fn start(hart_id: usize, dtb: *mut u8) {
     unsafe { clear_bss() };
     trap::set_trap();
 
-    let dtb = unsafe { FdtPtr::from_raw_ptr(dtb).unwrap() };
+    let dtb = unsafe { Fdt::from_raw_ptr(dtb).unwrap() };
 
     let _ = writeln!(Console, "Hello, World! hart_id={hart_id}");
     let _ = writeln!(Console, "dtb={:#?}", dtb.header());
