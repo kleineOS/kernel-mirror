@@ -11,8 +11,11 @@ use crate::{
 mod arch;
 mod fdt;
 mod init;
+mod lock;
 mod sbi;
 mod trap;
+
+static WRITER: lock::Mutex<Console> = lock::Mutex::new(Console);
 
 #[unsafe(no_mangle)]
 extern "C" fn start(hart_id: usize, dtb: *mut u8) {
@@ -22,26 +25,13 @@ extern "C" fn start(hart_id: usize, dtb: *mut u8) {
 
     let dtb = unsafe { Fdt::from_raw_ptr(dtb).unwrap() };
 
-    let _ = writeln!(Console);
-    let _ = writeln!(Console, "Hello, World! hart_id={hart_id}");
+    println!();
+    println!("Hello, World! hart_id={hart_id}");
 
     dtb.structure(c"/memory", |Prop { node, name, data }| {
-        let _ = writeln!(
-            Console,
-            "{node:?} PROP: name={name:?},data=[{} bytes]",
-            data.len()
-        );
+        println!("{node:?} PROP: name={name:?},data=[{} bytes]", data.len());
     })
     .expect("could not parse devicetree");
-
-    // dtb.structure(c"/cpus/cpu", |node, name, data| {
-    //     let _ = writeln!(
-    //         Console,
-    //         "{node:?} PROP: name={name:?},data=[{} bytes]",
-    //         data.len()
-    //     );
-    // })
-    // .expect("could not parse devicetree");
 
     arch::unimp();
 
@@ -50,6 +40,7 @@ extern "C" fn start(hart_id: usize, dtb: *mut u8) {
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
+    // println will have a lock, so it may be better to simply write to the consoel directly here
     let _ = writeln!(Console, "\n{info}");
 
     loop {
@@ -79,3 +70,20 @@ unsafe fn clear_bss() {
 
 include_asm!("entry.s");
 include_asm!("ktrapvec.s");
+
+#[doc(hidden)]
+pub fn _print(args: core::fmt::Arguments) {
+    use core::fmt::Write as _;
+    WRITER.lock().write_fmt(args).unwrap();
+}
+
+#[macro_export]
+macro_rules! print {
+    ($($arg:tt)*) => ($crate::_print(format_args!($($arg)*)));
+}
+
+#[macro_export]
+macro_rules! println {
+    () => ($crate::print!("\n"));
+    ($($arg:tt)*) => ($crate::print!("{}\n", format_args!($($arg)*)));
+}
