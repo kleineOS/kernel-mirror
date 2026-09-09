@@ -21,8 +21,8 @@ pub enum FdtError {
 impl core::fmt::Display for FdtError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            FdtError::NullPtr => write!(f, "Null pointer was provided for parsing the device tree"),
-            FdtError::MagicInvalid { expected, got } => write!(
+            Self::NullPtr => write!(f, "Null pointer was provided for parsing the device tree"),
+            Self::MagicInvalid { expected, got } => write!(
                 f,
                 "Invalid Magic value was read: expected={expected:#x?},got={got:#x?}"
             ),
@@ -41,8 +41,8 @@ pub enum ParseError {
 impl core::fmt::Display for ParseError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            ParseError::NoNullByte => write!(f, "A string in the tree has no null terminator"),
-            ParseError::StringOutOfBounds => write!(f, "A string is located out of bounds"),
+            Self::NoNullByte => write!(f, "A string in the tree has no null terminator"),
+            Self::StringOutOfBounds => write!(f, "A string is located out of bounds"),
         }
     }
 }
@@ -58,7 +58,7 @@ pub struct Fdt<'a> {
     header: FdtHeader,
 }
 
-impl<'a> Fdt<'a> {
+impl Fdt<'_> {
     pub const VALID_MAGIC: BigEndianU32<true> = BigEndianU32::new(0xd00d_feed);
 
     /// # Safety
@@ -81,10 +81,6 @@ impl<'a> Fdt<'a> {
         Ok(Self { dtb_bytes, header })
     }
 
-    pub fn header(&self) -> FdtHeader {
-        self.header
-    }
-
     pub fn structure(&self, path: &CStr, props: impl Fn(Prop)) -> Result<(), ParseError> {
         let mut bytes = FdtNodeReader::new(self.struct_bytes());
 
@@ -94,7 +90,7 @@ impl<'a> Fdt<'a> {
         let mut current_depth = 0;
         let mut matched_depth = 0;
 
-        let mut matched_node = c"HELLO";
+        let mut matched_node = c"unknown";
 
         loop {
             match bytes.read_u32() {
@@ -139,14 +135,11 @@ impl<'a> Fdt<'a> {
                             node: matched_node,
                             name: prop_name,
                             data,
-                        })
+                        });
                     }
                 }
                 FDT_NOP => { /* intentionally do nothing */ }
-                FDT_END => {
-                    // let _ = writeln!(Console, "FDT_END");
-                    break;
-                }
+                FDT_END => break,
 
                 node => unreachable!("Node {node:#x?} is invalid"),
             }
@@ -231,7 +224,7 @@ pub struct FdtNodeReader<'a> {
 }
 
 impl<'a> FdtNodeReader<'a> {
-    pub fn new(buf: &'a [u8]) -> Self {
+    pub const fn new(buf: &'a [u8]) -> Self {
         Self {
             inner: buf,
             position: 0,
@@ -292,7 +285,7 @@ impl<const HEX: bool> BigEndianU32<HEX> {
         }
     }
 
-    pub fn get(&self) -> u32 {
+    pub const fn get(self) -> u32 {
         // we know that our targets will always be le, but it is still better to code that
         // assumption into the software
         #[cfg(target_endian = "little")]

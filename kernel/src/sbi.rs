@@ -23,7 +23,7 @@ pub struct Sbi {
 
 impl Sbi {
     pub fn dbcn_console_write(data: &str) {
-        const EID: usize = 0x4442434E;
+        const EID: usize = 0x4442_434E;
         const FID: usize = 0x0;
 
         let num_bytes = data.len();
