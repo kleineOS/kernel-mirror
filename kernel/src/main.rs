@@ -3,7 +3,10 @@
 
 use core::{fmt::Write, panic::PanicInfo};
 
-use crate::{fdt::Fdt, sbi::Console};
+use crate::{
+    fdt::{Fdt, Prop},
+    sbi::Console,
+};
 
 mod arch;
 mod fdt;
@@ -19,10 +22,26 @@ extern "C" fn start(hart_id: usize, dtb: *mut u8) {
 
     let dtb = unsafe { Fdt::from_raw_ptr(dtb).unwrap() };
 
+    let _ = writeln!(Console);
     let _ = writeln!(Console, "Hello, World! hart_id={hart_id}");
-    let _ = writeln!(Console, "dtb={:#?}", dtb.header());
 
-    dtb.structure();
+    dtb.structure(c"/memory", |Prop { node, name, data }| {
+        let _ = writeln!(
+            Console,
+            "{node:?} PROP: name={name:?},data=[{} bytes]",
+            data.len()
+        );
+    })
+    .expect("could not parse devicetree");
+
+    // dtb.structure(c"/cpus/cpu", |node, name, data| {
+    //     let _ = writeln!(
+    //         Console,
+    //         "{node:?} PROP: name={name:?},data=[{} bytes]",
+    //         data.len()
+    //     );
+    // })
+    // .expect("could not parse devicetree");
 
     arch::unimp();
 

@@ -1,6 +1,7 @@
-use core::{ffi::CStr, fmt::Write, ptr::NonNull};
-
-use crate::sbi::Console;
+use core::{
+    ffi::{CStr, FromBytesUntilNulError},
+    ptr::NonNull,
+};
 
 pub const FDT_BEGIN_NODE: u32 = 0x01;
 pub const FDT_END_NODE: u32 = 0x02;
@@ -28,6 +29,25 @@ impl core::fmt::Display for FdtError {
         }
     }
 }
+
+impl core::error::Error for FdtError {}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ParseError {
+    NoNullByte,
+    StringOutOfBounds,
+}
+
+impl core::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            ParseError::NoNullByte => write!(f, "A string in the tree has no null terminator"),
+            ParseError::StringOutOfBounds => write!(f, "A string is located out of bounds"),
+        }
+    }
+}
+
+impl core::error::Error for ParseError {}
 
 pub struct Fdt<'a> {
     /// All the bytes which represent a flattened device tree
@@ -65,51 +85,74 @@ impl<'a> Fdt<'a> {
         self.header
     }
 
-    pub fn structure(&self) {
+    pub fn structure(&self, path: &CStr, props: impl Fn(Prop)) -> Result<(), ParseError> {
         let mut bytes = FdtNodeReader::new(self.struct_bytes());
+
+        let path = path.to_bytes();
+        let path_depth = path.split(|&b| b == b'/').count();
+
+        let mut current_depth = 0;
+        let mut matched_depth = 0;
+
+        let mut matched_node = c"HELLO";
 
         loop {
             match bytes.read_u32() {
-                FDT_BEGIN_NODE => match bytes.read_cstr() {
-                    Some(name) => {
-                        let _ = writeln!(Console, "FDT_BEGIN_NODE(name={name:?})");
+                FDT_BEGIN_NODE => {
+                    // contains the name and optionally the unit address
+                    let name = bytes.read_cstr().ok_or(ParseError::NoNullByte)?;
+
+                    // remove the unit address from the name
+                    let name_bytes = name.to_bytes();
+                    let node_name = name_bytes
+                        .split(|&b| b == b'@')
+                        .next()
+                        .unwrap_or(name_bytes);
+
+                    let expected = path.split(|&b| b == b'/').nth(current_depth);
+
+                    if matched_depth == current_depth && expected == Some(node_name) {
+                        matched_depth += 1;
+
+                        if matched_depth == path_depth {
+                            matched_node = name;
+                        }
                     }
-                    None => {
-                        let _ = writeln!(Console, "FDT_BEGIN_NODE(name=\"UNKNOWN\")");
-                    }
-                },
+
+                    current_depth += 1;
+                }
                 FDT_END_NODE => {
-                    let _ = writeln!(Console, "FDT_END_NODE");
+                    current_depth -= 1;
+                    if matched_depth > current_depth {
+                        matched_depth = current_depth;
+                    }
                 }
                 FDT_PROP => {
                     let len = bytes.read_u32();
                     let name_offset = bytes.read_u32();
                     let data = bytes.read_slice(len as usize);
 
-                    match self.get_name(name_offset) {
-                        Some(name) => {
-                            let _ = writeln!(
-                                Console,
-                                "FDT_PROP(name={name:?},len={len},data={data:?})"
-                            );
-                        }
-                        None => {
-                            let _ = writeln!(
-                                Console,
-                                "FDT_PROP(name=\"UNKNOWN\",len={len},data={data:?})"
-                            );
-                        }
-                    };
+                    let prop_name = self.get_name(name_offset)?;
+
+                    if matched_depth == path_depth && current_depth == path_depth {
+                        props(Prop {
+                            node: matched_node,
+                            name: prop_name,
+                            data,
+                        })
+                    }
                 }
                 FDT_NOP => { /* intentionally do nothing */ }
                 FDT_END => {
-                    let _ = writeln!(Console, "FDT_END");
+                    // let _ = writeln!(Console, "FDT_END");
                     break;
                 }
 
                 node => unreachable!("Node {node:#x?} is invalid"),
             }
         }
+
+        Ok(())
     }
 
     fn struct_bytes(&self) -> &[u8] {
@@ -122,7 +165,7 @@ impl<'a> Fdt<'a> {
         &self.dtb_bytes[offset..end]
     }
 
-    fn get_name(&self, name_offset: u32) -> Option<&CStr> {
+    fn get_name(&self, name_offset: u32) -> Result<&CStr, ParseError> {
         let header = &self.header;
 
         let offset = header.off_dt_strings.get() as usize;
@@ -132,10 +175,19 @@ impl<'a> Fdt<'a> {
         let strings_blob = &self.dtb_bytes[offset..end];
 
         let name_offset = name_offset as usize;
-        let name_bytes = strings_blob.get(name_offset..)?;
+        let name_bytes = strings_blob
+            .get(name_offset..)
+            .ok_or(ParseError::StringOutOfBounds)?;
 
-        CStr::from_bytes_until_nul(name_bytes).ok()
+        CStr::from_bytes_until_nul(name_bytes)
+            .map_err(|_: FromBytesUntilNulError| ParseError::NoNullByte)
     }
+}
+
+pub struct Prop<'a> {
+    pub node: &'a CStr,
+    pub name: &'a CStr,
+    pub data: &'a [u8],
 }
 
 #[repr(C)]
@@ -211,7 +263,7 @@ impl<'a> FdtNodeReader<'a> {
         number
     }
 
-    pub fn read_cstr(&mut self) -> Option<&CStr> {
+    pub fn read_cstr(&mut self) -> Option<&'a CStr> {
         let bytes = &self.inner[self.position..];
 
         let string = CStr::from_bytes_until_nul(bytes).ok()?;
