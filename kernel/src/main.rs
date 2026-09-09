@@ -14,8 +14,7 @@ mod init;
 mod lock;
 mod sbi;
 mod trap;
-
-static WRITER: lock::Mutex<Console> = lock::Mutex::new(Console);
+mod writer;
 
 #[unsafe(no_mangle)]
 extern "C" fn start(hart_id: usize, dtb: *mut u8) {
@@ -70,20 +69,3 @@ unsafe fn clear_bss() {
 
 include_asm!("entry.s");
 include_asm!("ktrapvec.s");
-
-#[doc(hidden)]
-pub fn _print(args: core::fmt::Arguments) {
-    use core::fmt::Write as _;
-    WRITER.lock().write_fmt(args).unwrap();
-}
-
-#[macro_export]
-macro_rules! print {
-    ($($arg:tt)*) => ($crate::_print(format_args!($($arg)*)));
-}
-
-#[macro_export]
-macro_rules! println {
-    () => ($crate::print!("\n"));
-    ($($arg:tt)*) => ($crate::print!("{}\n", format_args!($($arg)*)));
-}
