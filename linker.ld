@@ -37,8 +37,6 @@ SECTIONS {
         __bss_end = .;
     }
 
-    __kernel_end = .;
-
     /*
      * This will be used by the very first init function in the kernel. That
      * function will then set up a stack for every single hart, after which
@@ -49,4 +47,6 @@ SECTIONS {
         . += BOOT_STACK_SIZE;
         __boot_stack_top = .;
     }
+
+    __kernel_end = .;
 }
