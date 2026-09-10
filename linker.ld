@@ -24,7 +24,7 @@ SECTIONS {
     }
 
     .data ALIGN(PAGE_SIZE) : {
-        *(.data. .data.*)
+        *(.data .data.*)
         *(.sdata .sdata.*)
     }
 
