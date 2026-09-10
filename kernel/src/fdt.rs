@@ -9,6 +9,8 @@ use core::{
     str::Utf8Error,
 };
 
+use crate::println;
+
 pub const FDT_BEGIN_NODE: u32 = 0x01;
 pub const FDT_END_NODE: u32 = 0x02;
 pub const FDT_PROP: u32 = 0x03;
@@ -94,7 +96,7 @@ impl Fdt<'_> {
         Node::new(blob)
     }
 
-    pub fn get_name(&self, name_offset: &NameOffset) -> Result<&str, ParseError> {
+    pub fn name(&self, name_offset: &NameOffset) -> Result<&str, ParseError> {
         let header = &self.header;
 
         let offset = header.off_dt_strings.get() as usize;
@@ -268,6 +270,81 @@ impl<'a> Iterator for PropertyIter<'a> {
         }
 
         None
+    }
+}
+
+#[derive(Debug)]
+pub struct MemRegion {
+    pub address: u64,
+    pub size: u64,
+}
+
+impl MemRegion {
+    pub fn get_first_mem_region(dtb: &Fdt) -> Self {
+        // these are defaults because I find it safe to assume that the address of a 64-bit computer
+        // is encoded as 64 bits, and each cell represents a 32-bit value
+        const ADDRESS_CELLS_DEFAULT: u32 = 2;
+        const SIZE_CELLS_DEFAULT: u32 = 2;
+
+        let root = dtb.root();
+
+        let mut address_cells = None;
+        let mut size_cells = None;
+
+        for prop in root.properties() {
+            let Ok(name) = dtb.name(&prop.name_offset) else {
+                println!("WARN: encountered non-UTF-8 name in the devicetree");
+                continue;
+            };
+
+            let dst = match name {
+                "#address-cells" => &mut address_cells,
+                "#size-cells" => &mut size_cells,
+                _ => continue,
+            };
+
+            // for both address cells and size cells, the data HAS to be at least 4 bytes
+            let data: [u8; 4] = core::array::from_fn(|i| prop.data[i]);
+            let cell_size_bytes = u32::from_be_bytes(data);
+            *dst = Some(cell_size_bytes);
+        }
+
+        let address_cells = address_cells.unwrap_or_else(|| {
+            println!("WARN: #address-cells not specified in device tree");
+            ADDRESS_CELLS_DEFAULT
+        }) as usize;
+
+        let size_cells = size_cells.unwrap_or_else(|| {
+            println!("WARN: #size-cells not specified in device tree");
+            SIZE_CELLS_DEFAULT
+        }) as usize;
+
+        let memory = root.find("/memory").unwrap();
+
+        let reg = memory
+            .properties()
+            .find(|p| dtb.name(&p.name_offset).is_ok_and(|e| e == "reg"))
+            .expect("the memory block is supposed to have a property with the name `reg`");
+
+        // each cell is 4 bytes, as each cell is u32
+        let address_bytes_count = address_cells * 4;
+        let size_bytes_count = size_cells * 4;
+        let chunk_size = address_bytes_count + size_bytes_count;
+
+        let address = &reg.data[..address_bytes_count];
+        let size = &reg.data[address_bytes_count..chunk_size];
+
+        let address = address.as_chunks().0.iter().fold(0, |value, cell| {
+            let cell = u32::from_be_bytes(*cell);
+            (value << 32) | u64::from(cell)
+        });
+
+        let size = size.as_chunks().0.iter().fold(0, |value, cell| {
+            let cell = u32::from_be_bytes(*cell);
+            (value << 32) | u64::from(cell)
+        });
+
+        Self { address, size }
     }
 }
 

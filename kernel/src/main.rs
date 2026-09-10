@@ -4,7 +4,10 @@
 
 use core::{fmt::Write, panic::PanicInfo};
 
-use crate::{fdt::Fdt, sbi::Console};
+use crate::{
+    fdt::{Fdt, MemRegion},
+    sbi::Console,
+};
 
 mod arch;
 mod fdt;
@@ -14,32 +17,23 @@ mod sbi;
 mod trap;
 mod writer;
 
+pub struct BitmapAlloc {}
+
 #[unsafe(no_mangle)]
-extern "C" fn start(hart_id: usize, dtb: *mut u8) {
+extern "C" fn start(hart_id: usize, dtbp: *mut u8) {
     // Safety: Running the code at the start of our kernel, and only runnig it once
     unsafe { clear_bss() };
     trap::set_trap();
 
-    let dtb = unsafe { Fdt::from_raw_ptr(dtb).unwrap() };
+    let dtb: Fdt = unsafe { Fdt::from_raw_ptr(dtbp).unwrap() };
+
+    let mem = MemRegion::get_first_mem_region(&dtb);
 
     println!();
-    println!("Hello, World! hart_id={hart_id}");
-
-    let root = dtb.root();
-    for prop in root.properties() {
-        let name = dtb.get_name(&prop.name_offset).unwrap();
-        let data = prop.data;
-
-        println!("root name={name} data={data:?}");
-    }
-
-    let memory_node = root.find("/memory").unwrap();
-    for prop in memory_node.properties() {
-        let name = dtb.get_name(&prop.name_offset).unwrap();
-        let data = prop.data;
-
-        println!("name={name} data={data:?}");
-    }
+    println!(
+        "Hello, World! hart_id={hart_id} {:x?} {mem:#x?}",
+        dtbp as usize
+    );
 
     sbi::Sbi::time_set_timer(usize::MAX);
     arch::sstatus_set_bit(arch::SSTATUS_SIE, true);
