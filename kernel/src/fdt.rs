@@ -1,3 +1,8 @@
+//! Device tree parser
+//!
+//! The parser makes no allocations, and has no look-back. As a result, it may waste computation
+//! when trying to parse multiple nodes.
+
 use core::{
     ffi::{CStr, FromBytesUntilNulError},
     ptr::NonNull,
@@ -258,7 +263,7 @@ impl<'a> Iterator for PropertyIter<'a> {
                 FDT_NOP => (),
                 FDT_END => break,
 
-                _ => todo!(),
+                unknown => unreachable!("unreachable branch in fdt parsing: {unknown:#x}"),
             }
         }
 
