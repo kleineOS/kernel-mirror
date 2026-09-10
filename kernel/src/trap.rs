@@ -7,6 +7,128 @@ pub fn set_trap() {
     unsafe { crate::arch::write_stvec(addr) };
 }
 
+#[repr(usize)]
+#[derive(Debug)]
+pub enum InterruptCause {
+    Software = 1,
+    Timer = 5,
+    External = 9,
+    CounterOverflow = 13,
+}
+
+#[repr(usize)]
+#[derive(Debug)]
+pub enum ExceptionCause {
+    InstructionAddressMisaligned = 0,
+    InstructionAccessFault = 1,
+    IllegalInstruction = 2,
+    Breakpoint = 3,
+    LoadAddressMisaligned = 4,
+    LoadAccessFault = 5,
+    StoreAddressMisaligned = 6,
+    StoreAccessFault = 7,
+    EnviornmentCallFromSupervisor = 8,
+    EnviornmentCallFromUser = 9,
+    InstructionPageFault = 12,
+    LoadPageFault = 13,
+    StorePageFault = 15,
+    SoftwareCheck = 18,
+    HardwareError = 19,
+}
+
+#[derive(Debug)]
+pub struct InvalidConversion;
+
+impl TryFrom<usize> for ExceptionCause {
+    type Error = InvalidConversion;
+
+    fn try_from(value: usize) -> Result<Self, Self::Error> {
+        let value = match value {
+            0 => Self::InstructionAddressMisaligned,
+            1 => Self::InstructionAccessFault,
+            2 => Self::IllegalInstruction,
+            3 => Self::Breakpoint,
+            4 => Self::LoadAddressMisaligned,
+            5 => Self::LoadAccessFault,
+            6 => Self::StoreAddressMisaligned,
+            7 => Self::StoreAccessFault,
+            8 => Self::EnviornmentCallFromSupervisor,
+            9 => Self::EnviornmentCallFromUser,
+            12 => Self::InstructionPageFault,
+            13 => Self::LoadPageFault,
+            15 => Self::StorePageFault,
+            18 => Self::SoftwareCheck,
+            19 => Self::HardwareError,
+            _ => return Err(InvalidConversion),
+        };
+
+        Ok(value)
+    }
+}
+
+impl TryFrom<usize> for InterruptCause {
+    type Error = InvalidConversion;
+
+    fn try_from(value: usize) -> Result<Self, Self::Error> {
+        let value = match value {
+            1 => Self::Software,
+            5 => Self::Timer,
+            9 => Self::External,
+            13 => Self::CounterOverflow,
+            _ => return Err(InvalidConversion),
+        };
+
+        Ok(value)
+    }
+}
+
+#[derive(Debug)]
+pub enum Cause {
+    Interrupt(InterruptCause),
+    Exception(ExceptionCause),
+}
+
+impl Cause {
+    pub fn from_scause(scause: usize) -> Result<Self, InvalidConversion> {
+        let interrupt = ((scause >> 63) & 1) == 1;
+        let cause = scause & ((1 << 63) - 1);
+
+        if interrupt {
+            InterruptCause::try_from(cause).map(Self::Interrupt)
+        } else {
+            ExceptionCause::try_from(cause).map(Self::Exception)
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn kerneltrap(frame: &mut TrapFrame) {
+    let scause = unsafe {
+        let scause: usize;
+        core::arch::asm!("csrr {}, scause", out(reg) scause, options(nomem, nostack));
+        scause
+    };
+
+    let sepc = unsafe {
+        let sepc: usize;
+        core::arch::asm!("csrr {}, sepc", out(reg) sepc, options(nomem, nostack));
+        sepc
+    };
+
+    let stval = unsafe {
+        let stval: usize;
+        core::arch::asm!("csrr {}, stval", out(reg) stval, options(nomem, nostack));
+        stval
+    };
+
+    let cause = Cause::from_scause(scause).unwrap();
+
+    todo!(
+        "Kernel trap is not yet implemented. cause={cause:?} sepc={sepc:#x?} stval={stval:#x?} {}",
+        frame
+    );
+}
+
 #[repr(C)]
 #[derive(Debug)]
 pub struct TrapFrame {
@@ -63,35 +185,4 @@ impl core::fmt::Display for TrapFrame {
 
         Ok(())
     }
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn kerneltrap(frame: &mut TrapFrame) {
-    let scause = unsafe {
-        let scause: usize;
-        core::arch::asm!("csrr {}, scause", out(reg) scause, options(nomem, nostack));
-        scause
-    };
-
-    let sepc = unsafe {
-        let sepc: usize;
-        core::arch::asm!("csrr {}, sepc", out(reg) sepc, options(nomem, nostack));
-        sepc
-    };
-
-    let stval = unsafe {
-        let stval: usize;
-        core::arch::asm!("csrr {}, stval", out(reg) stval, options(nomem, nostack));
-        stval
-    };
-
-    let int = ((scause >> 63) & 1) == 1;
-    let cause = scause & ((1 << 63) - 1);
-
-    todo!(
-        "Kernel trap is not yet implemented. int={} cause={} sepc={sepc:#x?} stval={stval:#x?} {}",
-        int,
-        cause,
-        frame
-    );
 }
