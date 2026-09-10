@@ -29,8 +29,8 @@ pub enum ExceptionCause {
     LoadAccessFault = 5,
     StoreAddressMisaligned = 6,
     StoreAccessFault = 7,
-    EnviornmentCallFromSupervisor = 8,
-    EnviornmentCallFromUser = 9,
+    EnviornmentCallFromUser = 8,
+    EnviornmentCallFromSupervisor = 9,
     InstructionPageFault = 12,
     LoadPageFault = 13,
     StorePageFault = 15,
@@ -132,7 +132,6 @@ extern "C" fn kerneltrap(frame: &mut TrapFrame) {
         );
     }
 
-    println!("{cause:?}");
     if matches!(cause, Cause::Interrupt(InterruptCause::Timer)) {
         crate::sbi::Sbi::time_set_timer(crate::arch::time() + 1_000_000);
     }
