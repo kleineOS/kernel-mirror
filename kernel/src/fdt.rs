@@ -1,6 +1,7 @@
 use core::{
     ffi::{CStr, FromBytesUntilNulError},
     ptr::NonNull,
+    str::Utf8Error,
 };
 
 pub const FDT_BEGIN_NODE: u32 = 0x01;
@@ -36,6 +37,7 @@ impl core::error::Error for FdtError {}
 pub enum ParseError {
     NoNullByte,
     StringOutOfBounds,
+    InvalidUtf8,
 }
 
 impl core::fmt::Display for ParseError {
@@ -43,6 +45,7 @@ impl core::fmt::Display for ParseError {
         match self {
             Self::NoNullByte => write!(f, "A string in the tree has no null terminator"),
             Self::StringOutOfBounds => write!(f, "A string is located out of bounds"),
+            Self::InvalidUtf8 => write!(f, "Invalid UTF-8 characters when parsing string"),
         }
     }
 }
@@ -81,71 +84,29 @@ impl Fdt<'_> {
         Ok(Self { dtb_bytes, header })
     }
 
-    pub fn structure(&self, path: &CStr, props: impl Fn(Prop)) -> Result<(), ParseError> {
-        let mut bytes = FdtNodeReader::new(self.struct_bytes());
+    pub fn root(&self) -> Node<'_> {
+        let blob = self.struct_bytes();
+        Node::new(blob)
+    }
 
-        let path = path.to_bytes();
-        let path_depth = path.split(|&b| b == b'/').count();
+    pub fn get_name(&self, name_offset: &NameOffset) -> Result<&str, ParseError> {
+        let header = &self.header;
 
-        let mut current_depth = 0;
-        let mut matched_depth = 0;
+        let offset = header.off_dt_strings.get() as usize;
+        let size = header.size_dt_strings.get() as usize;
+        let end = offset + size;
 
-        let mut matched_node = c"unknown";
+        let strings_blob = &self.dtb_bytes[offset..end];
 
-        loop {
-            match bytes.read_u32() {
-                FDT_BEGIN_NODE => {
-                    // contains the name and optionally the unit address
-                    let name = bytes.read_cstr().ok_or(ParseError::NoNullByte)?;
+        let name_offset = name_offset.0 as usize;
+        let name_bytes = strings_blob
+            .get(name_offset..)
+            .ok_or(ParseError::StringOutOfBounds)?;
 
-                    // remove the unit address from the name
-                    let name_bytes = name.to_bytes();
-                    let node_name = name_bytes
-                        .split(|&b| b == b'@')
-                        .next()
-                        .unwrap_or(name_bytes);
-
-                    let expected = path.split(|&b| b == b'/').nth(current_depth);
-
-                    if matched_depth == current_depth && expected == Some(node_name) {
-                        matched_depth += 1;
-
-                        if matched_depth == path_depth {
-                            matched_node = name;
-                        }
-                    }
-
-                    current_depth += 1;
-                }
-                FDT_END_NODE => {
-                    current_depth -= 1;
-                    if matched_depth > current_depth {
-                        matched_depth = current_depth;
-                    }
-                }
-                FDT_PROP => {
-                    let len = bytes.read_u32();
-                    let name_offset = bytes.read_u32();
-                    let data = bytes.read_slice(len as usize);
-
-                    let prop_name = self.get_name(name_offset)?;
-
-                    if matched_depth == path_depth && current_depth == path_depth {
-                        props(Prop {
-                            node: matched_node,
-                            name: prop_name,
-                            data,
-                        });
-                    }
-                }
-                FDT_NOP => { /* intentionally do nothing */ }
-                FDT_END => break,
-
-                node => unreachable!("Node {node:#x?} is invalid"),
-            }
-        }
-
-        Ok(())
+        CStr::from_bytes_until_nul(name_bytes)
+            .map_err(|_: FromBytesUntilNulError| ParseError::NoNullByte)?
+            .to_str()
+            .map_err(|_: Utf8Error| ParseError::InvalidUtf8)
     }
 
     fn struct_bytes(&self) -> &[u8] {
@@ -157,36 +118,158 @@ impl Fdt<'_> {
 
         &self.dtb_bytes[offset..end]
     }
+}
 
-    fn get_name(&self, name_offset: u32) -> Result<&CStr, ParseError> {
-        let header = &self.header;
+#[derive(Clone, Copy)]
+pub struct Node<'a> {
+    blob: &'a [u8],
+    offset: usize,
+}
 
-        let offset = header.off_dt_strings.get() as usize;
-        let size = header.size_dt_strings.get() as usize;
-        let end = offset + size;
+impl<'a> Node<'a> {
+    pub const fn new(blob: &'a [u8]) -> Self {
+        Self { blob, offset: 0 }
+    }
 
-        let strings_blob = &self.dtb_bytes[offset..end];
+    const fn copy_with_offset(&self, offset: usize) -> Self {
+        Self {
+            blob: self.blob,
+            offset,
+        }
+    }
 
-        let name_offset = name_offset as usize;
-        let name_bytes = strings_blob
-            .get(name_offset..)
-            .ok_or(ParseError::StringOutOfBounds)?;
+    pub fn properties(&self) -> PropertyIter<'_> {
+        let reader = self.as_node_reader();
+        PropertyIter::new(reader)
+    }
 
-        CStr::from_bytes_until_nul(name_bytes)
-            .map_err(|_: FromBytesUntilNulError| ParseError::NoNullByte)
+    /// Find a node one level deeper in relation to the current root node
+    pub fn find(&self, target: &str) -> Option<Node<'_>> {
+        let target = target.trim_matches('/');
+
+        // we always assume our current node to be the root, and the node query from the user to be
+        // relative to it. If the query is for the root node itself, then the current node is copied
+        if target.is_empty() {
+            return Some(*self);
+        }
+
+        let mut reader = self.as_node_reader();
+        let mut depth = 0;
+
+        loop {
+            let offset = reader.position;
+
+            match reader.read_u32() {
+                FDT_BEGIN_NODE => {
+                    let name = reader.read_cstr_as_str()?;
+                    // the name will be in node-name@unit-address format
+                    // we only need to match against the name
+                    let name = name.split_once('@').map_or(name, |(name, _)| name);
+
+                    if depth == 1 && name == target {
+                        return Some(self.copy_with_offset(offset));
+                    }
+
+                    depth += 1;
+                }
+
+                FDT_PROP => {
+                    // skip through the FDT_PROP data so it does not interfere with parsing
+                    let len = reader.read_u32();
+                    let _ = reader.read_u32();
+                    let _ = reader.read_slice(len as usize);
+                }
+
+                FDT_END_NODE => match depth {
+                    0 => return None,
+                    _ => depth -= 1,
+                },
+                FDT_END => return None,
+
+                FDT_NOP => (),
+
+                unknown => unreachable!("unreachable branch in fdt parsing: {unknown:#x}"),
+            }
+        }
+    }
+
+    fn as_node_reader(&self) -> FdtNodeReader<'_> {
+        FdtNodeReader::new(&self.blob[self.offset..])
     }
 }
 
-pub struct Prop<'a> {
-    pub node: &'a CStr,
-    pub name: &'a CStr,
+#[derive(Debug)]
+pub struct NameOffset(u32);
+
+#[derive(Debug)]
+pub struct Property<'a> {
     pub data: &'a [u8],
+    pub name_offset: NameOffset,
+}
+
+pub struct PropertyIter<'a> {
+    reader: FdtNodeReader<'a>,
+    depth: i32,
+}
+
+impl<'a> PropertyIter<'a> {
+    pub const fn new(reader: FdtNodeReader<'a>) -> Self {
+        Self { reader, depth: -1 }
+    }
+}
+
+impl<'a> Iterator for PropertyIter<'a> {
+    type Item = Property<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            match self.reader.read_u32() {
+                FDT_BEGIN_NODE => {
+                    let _ = self.reader.read_cstr();
+                    self.depth += 1;
+                }
+
+                FDT_END_NODE => {
+                    if self.depth == 0 {
+                        break;
+                    }
+                    self.depth -= 1;
+                }
+
+                FDT_PROP if self.depth == 0 => {
+                    let len = self.reader.read_u32();
+                    let name_offset = self.reader.read_u32();
+                    let data = self.reader.read_slice(len as usize);
+
+                    let property = Property {
+                        data,
+                        name_offset: NameOffset(name_offset),
+                    };
+
+                    return Some(property);
+                }
+
+                FDT_PROP => {
+                    let len = self.reader.read_u32();
+                    let _ = self.reader.read_u32();
+                    let _ = self.reader.read_slice(len as usize);
+                }
+
+                FDT_NOP => (),
+                FDT_END => break,
+
+                _ => todo!(),
+            }
+        }
+
+        None
+    }
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct FdtHeader {
-    /// This field shall contain the value 0xd00dfeed (big-endian).
+    /// This field shall contain the value `0xd00d_feed` (big-endian).
     pub magic: BigEndianU32<true>,
     /// This field shall contain the total size in bytes of the devicetree data structure. This size
     /// shall encompass all sections of the structure: the header, the memory reservation block,
@@ -231,7 +314,7 @@ impl<'a> FdtNodeReader<'a> {
         }
     }
 
-    pub fn read_slice(&mut self, size: usize) -> &[u8] {
+    pub fn read_slice(&mut self, size: usize) -> &'a [u8] {
         let start = self.position;
         let end = start + size;
 
@@ -267,6 +350,21 @@ impl<'a> FdtNodeReader<'a> {
         self.position += padded_len;
 
         Some(string)
+    }
+
+    pub fn read_cstr_as_str(&mut self) -> Option<&'a str> {
+        let bytes = &self.inner[self.position..];
+
+        let string = CStr::from_bytes_until_nul(bytes).ok()?;
+
+        let len = string.to_bytes_with_nul().len();
+        let padded_len = len.next_multiple_of(4);
+
+        self.position += padded_len;
+
+        let str_slice = string.to_str().ok()?;
+
+        Some(str_slice)
     }
 }
 

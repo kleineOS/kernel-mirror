@@ -1,12 +1,10 @@
 #![no_std]
 #![no_main]
+#![warn(clippy::pedantic, clippy::nursery)]
 
 use core::{fmt::Write, panic::PanicInfo};
 
-use crate::{
-    fdt::{Fdt, Prop},
-    sbi::Console,
-};
+use crate::{fdt::Fdt, sbi::Console};
 
 mod arch;
 mod fdt;
@@ -27,14 +25,23 @@ extern "C" fn start(hart_id: usize, dtb: *mut u8) {
     println!();
     println!("Hello, World! hart_id={hart_id}");
 
-    dtb.structure(c"/memory", |Prop { node, name, data }| {
-        println!("{node:?} PROP: name={name:?},data=[{} bytes]", data.len());
-    })
-    .expect("could not parse devicetree");
+    let root = dtb.root();
+    for prop in root.properties() {
+        let name = dtb.get_name(&prop.name_offset).unwrap();
+        let data = prop.data;
+
+        println!("root name={name} data={data:?}");
+    }
+
+    let memory_node = root.find("/memory").unwrap();
+    for prop in memory_node.properties() {
+        let name = dtb.get_name(&prop.name_offset).unwrap();
+        let data = prop.data;
+
+        println!("name={name} data={data:?}");
+    }
 
     arch::unimp();
-
-    todo!("Zero out BSS and initialise the harts");
 }
 
 #[panic_handler]
