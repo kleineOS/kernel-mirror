@@ -1,3 +1,5 @@
+use crate::println;
+
 unsafe extern "C" {
     fn ktrapvec();
 }
@@ -52,8 +54,8 @@ impl TryFrom<usize> for ExceptionCause {
             5 => Self::LoadAccessFault,
             6 => Self::StoreAddressMisaligned,
             7 => Self::StoreAccessFault,
-            8 => Self::EnviornmentCallFromSupervisor,
-            9 => Self::EnviornmentCallFromUser,
+            8 => Self::EnviornmentCallFromUser,
+            9 => Self::EnviornmentCallFromSupervisor,
             12 => Self::InstructionPageFault,
             13 => Self::LoadPageFault,
             15 => Self::StorePageFault,
@@ -123,10 +125,17 @@ extern "C" fn kerneltrap(frame: &mut TrapFrame) {
 
     let cause = Cause::from_scause(scause).unwrap();
 
-    todo!(
-        "Kernel trap is not yet implemented. cause={cause:?} sepc={sepc:#x?} stval={stval:#x?} {}",
-        frame
-    );
+    if matches!(cause, Cause::Exception(_)) {
+        todo!(
+            "Exception handler is not yet implemented. cause={cause:?} sepc={sepc:#x?} stval={stval:#x?} {}",
+            frame
+        );
+    }
+
+    println!("{cause:?}");
+    if matches!(cause, Cause::Interrupt(InterruptCause::Timer)) {
+        crate::sbi::Sbi::time_set_timer(crate::arch::time() + 1_000_000);
+    }
 }
 
 #[repr(C)]

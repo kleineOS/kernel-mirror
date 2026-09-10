@@ -41,7 +41,14 @@ extern "C" fn start(hart_id: usize, dtb: *mut u8) {
         println!("name={name} data={data:?}");
     }
 
-    arch::unimp();
+    sbi::Sbi::time_set_timer(usize::MAX);
+    arch::sstatus_set_bit(arch::SSTATUS_SIE, true);
+    arch::sie_set_bit(arch::SIE_STIE, true);
+    sbi::Sbi::time_set_timer(arch::time() + 1_000_000);
+
+    loop {
+        arch::wfi();
+    }
 }
 
 #[panic_handler]

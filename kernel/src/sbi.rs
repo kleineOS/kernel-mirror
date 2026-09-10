@@ -1,7 +1,7 @@
 use core::fmt::Write;
 
 /// Represents the required data for calling SBI
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Sbi {
     /// First argument for the SBI call
     a0: usize,
@@ -63,6 +63,20 @@ impl Sbi {
     //
     //     sbi.ecall();
     // }
+
+    pub fn time_set_timer(stime_value: usize) {
+        const EID: usize = 0x5449_4d45;
+        const FID: usize = 0x0;
+
+        let sbi = Self {
+            a0: stime_value,
+            fid: FID,
+            eid: EID,
+            ..Default::default()
+        };
+
+        sbi.ecall();
+    }
 
     fn ecall(self) {
         unsafe {
