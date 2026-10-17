@@ -1,4 +1,12 @@
+#![allow(unused)]
+
+//! RISC-V architecture related code. Currently incomplete. Intention is to provide high level APIs
+//! to access RISC-V CSRs, instructuions, the RISC-V SBI etc.
+
 use core::arch::asm;
+
+pub mod sbi;
+pub mod trap;
 
 #[macro_export]
 macro_rules! include_asm {

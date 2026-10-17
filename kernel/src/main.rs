@@ -5,20 +5,18 @@
 use core::{fmt::Write, panic::PanicInfo};
 
 use crate::{
+    arch::sbi::Console,
     fdt::{Fdt, MemRegion},
-    sbi::Console,
 };
 
 mod arch;
 mod fdt;
 mod lock;
-mod sbi;
-mod trap;
 mod writer;
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn start(hart_id: usize, dtbp: *mut u8) {
-    trap::set_trap();
+    arch::trap::set_trap();
 
     let dtb: Fdt = unsafe { Fdt::from_raw_ptr(dtbp) }
         .expect("devicetree pointer should lead to a valid device tree blob");
@@ -28,13 +26,11 @@ unsafe extern "C" fn start(hart_id: usize, dtbp: *mut u8) {
     // we exclude it
     mem.size = dtbp as u64 - mem.address;
 
+    // NOTE: for the virtual machine, the FDT is at the very end of the memory region. So I am going
+    // to actually ignore the step which ensures we dont consider the fdt's region as usable memory
+
     println!();
     println!("Hello, World! hart_id={hart_id} {mem:#x?}");
-
-    sbi::Sbi::time_set_timer(usize::MAX);
-    arch::sstatus_set_bit(arch::SSTATUS_SIE, true);
-    arch::sie_set_bit(arch::SIE_STIE, true);
-    sbi::Sbi::time_set_timer(arch::time() + 1_000_000);
 
     loop {
         arch::wfi();

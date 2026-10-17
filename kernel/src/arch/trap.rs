@@ -131,7 +131,7 @@ extern "C" fn kerneltrap(frame: &mut TrapFrame) {
     }
 
     if matches!(cause, Cause::Interrupt(InterruptCause::Timer)) {
-        crate::sbi::Sbi::time_set_timer(crate::arch::time() + 1_000_000);
+        crate::arch::sbi::Sbi::time_set_timer(crate::arch::time() + 1_000_000);
     }
 }
 

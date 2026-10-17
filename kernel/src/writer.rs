@@ -1,4 +1,4 @@
-use crate::{lock::Mutex, sbi::Console};
+use crate::{arch::sbi::Console, lock::Mutex};
 
 static WRITER: Mutex<Console> = Mutex::new(Console);
 
