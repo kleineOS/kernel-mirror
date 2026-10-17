@@ -1,5 +1,3 @@
-use crate::println;
-
 unsafe extern "C" {
     fn ktrapvec();
 }
