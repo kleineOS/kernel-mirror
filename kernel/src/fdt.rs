@@ -116,6 +116,14 @@ impl Fdt<'_> {
             .map_err(|_: Utf8Error| ParseError::InvalidUtf8)
     }
 
+    /// Memory region of the blob
+    pub fn blob_mem_region(&self) -> MemRegion {
+        MemRegion::new(
+            self.dtb_bytes.as_ptr() as u64,
+            self.header.totalsize.get().into(),
+        )
+    }
+
     fn struct_bytes(&self) -> &[u8] {
         let header = &self.header;
 
@@ -273,13 +281,17 @@ impl<'a> Iterator for PropertyIter<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct MemRegion {
     pub address: u64,
     pub size: u64,
 }
 
 impl MemRegion {
+    pub const fn new(address: u64, size: u64) -> Self {
+        Self { address, size }
+    }
+
     pub fn get_first_mem_region(dtb: &Fdt) -> Self {
         // these are defaults because I find it safe to assume that the address of a 64-bit computer
         // is encoded as 64 bits, and each cell represents a 32-bit value
@@ -319,7 +331,9 @@ impl MemRegion {
             SIZE_CELLS_DEFAULT
         }) as usize;
 
-        let memory = root.find("/memory").unwrap();
+        let memory = root
+            .find("/memory")
+            .expect("devicetree should advertise at least one memory region");
 
         let reg = memory
             .properties()
@@ -344,7 +358,39 @@ impl MemRegion {
             (value << 32) | u64::from(cell)
         });
 
-        Self { address, size }
+        Self::new(address, size)
+    }
+
+    pub fn find_free_region(&self, size: u64, alignment: u64, exclusions: &[Self]) -> Option<Self> {
+        if alignment == 0 {
+            return None;
+        }
+
+        if !alignment.is_power_of_two() {
+            return None; // peraps I can only accept Alignment::PageAligned or Alignment::None
+        }
+
+        let mut start = (self.address + alignment - 1) & !(alignment - 1);
+
+        loop {
+            if start + size > self.address + self.size {
+                return None;
+            }
+
+            let overlaps = exclusions.iter().any(|e| e.is_within(start, size));
+            if !overlaps {
+                return Some(Self::new(start, size));
+            }
+
+            start += alignment;
+        }
+    }
+
+    const fn is_within(&self, start: u64, size: u64) -> bool {
+        let end = start + size;
+        let region_end = self.address + self.size;
+
+        (self.address <= start && start < region_end) || (self.address <= end && end < region_end)
     }
 }
 
