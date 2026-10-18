@@ -5,7 +5,10 @@ static WRITER: Mutex<Console> = Mutex::new(Console);
 #[doc(hidden)]
 pub fn _print(args: core::fmt::Arguments) {
     use core::fmt::Write as _;
-    WRITER.lock().write_fmt(args).unwrap();
+    WRITER
+        .lock()
+        .write_fmt(args)
+        .expect("writer should not fail");
 }
 
 #[macro_export]
