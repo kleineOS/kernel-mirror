@@ -26,7 +26,7 @@ unsafe extern "C" fn start(_hart_id: usize, dtbp: *mut u8) {
         .expect("devicetree pointer should lead to a valid device tree blob");
 
     println!();
-    println!("kleineOS-kernel is starting");
+    println!("^w^ kleineOS-kernel is starting");
     println!();
 
     let mem_region = dtb.mem_region();
