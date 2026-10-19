@@ -9,7 +9,7 @@ use core::{
     str::Utf8Error,
 };
 
-use crate::println;
+use crate::{mem::MemRegion, println};
 
 pub const FDT_BEGIN_NODE: u32 = 0x01;
 pub const FDT_END_NODE: u32 = 0x02;
@@ -20,10 +20,7 @@ pub const FDT_END: u32 = 0x09;
 #[derive(Debug, Clone, Copy)]
 pub enum FdtError {
     NullPtr,
-    MagicInvalid {
-        expected: BigEndianU32<true>,
-        got: BigEndianU32<true>,
-    },
+    MagicInvalid { expected: FdtMagic, got: FdtMagic },
 }
 
 impl core::fmt::Display for FdtError {
@@ -69,8 +66,6 @@ pub struct Fdt<'a> {
 }
 
 impl Fdt<'_> {
-    pub const VALID_MAGIC: BigEndianU32<true> = BigEndianU32::new(0xd00d_feed);
-
     /// # Safety
     /// `ptr` must reference a complete and readable device tree blob which is valid for `'a`.
     pub unsafe fn from_raw_ptr(ptr: *mut u8) -> Result<Self, FdtError> {
@@ -78,9 +73,9 @@ impl Fdt<'_> {
 
         let header = unsafe { ptr.as_ptr().cast::<FdtHeader>().read_unaligned() };
 
-        if header.magic != Self::VALID_MAGIC {
+        if !header.magic.is_valid() {
             return Err(FdtError::MagicInvalid {
-                expected: Self::VALID_MAGIC,
+                expected: FdtMagic::VALID_MAGIC,
                 got: header.magic,
             });
         }
@@ -122,6 +117,75 @@ impl Fdt<'_> {
             self.dtb_bytes.as_ptr() as u64,
             self.header.totalsize.get().into(),
         )
+    }
+
+    pub fn mem_region(&self) -> MemRegion {
+        // these are defaults because I find it safe to assume that the address of a 64-bit computer
+        // is encoded as 64 bits, and each cell represents a 32-bit value
+        const ADDRESS_CELLS_DEFAULT: u32 = 2;
+        const SIZE_CELLS_DEFAULT: u32 = 2;
+
+        let root = self.root();
+
+        let mut address_cells = None;
+        let mut size_cells = None;
+
+        for prop in root.properties() {
+            let Ok(name) = self.name(&prop.name_offset) else {
+                println!("WARN: encountered non-UTF-8 name in the devicetree");
+                continue;
+            };
+
+            let dst = match name {
+                "#address-cells" => &mut address_cells,
+                "#size-cells" => &mut size_cells,
+                _ => continue,
+            };
+
+            // for both address cells and size cells, the data HAS to be at least 4 bytes
+            let data: [u8; 4] = core::array::from_fn(|i| prop.data[i]);
+            let cell_size_bytes = u32::from_be_bytes(data);
+            *dst = Some(cell_size_bytes);
+        }
+
+        let address_cells = address_cells.unwrap_or_else(|| {
+            println!("WARN: #address-cells not specified in device tree");
+            ADDRESS_CELLS_DEFAULT
+        }) as usize;
+
+        let size_cells = size_cells.unwrap_or_else(|| {
+            println!("WARN: #size-cells not specified in device tree");
+            SIZE_CELLS_DEFAULT
+        }) as usize;
+
+        let memory = root
+            .find("/memory")
+            .expect("devicetree should advertise at least one memory region");
+
+        let reg = memory
+            .properties()
+            .find(|p| self.name(&p.name_offset).is_ok_and(|e| e == "reg"))
+            .expect("the memory block is supposed to have a property with the name `reg`");
+
+        // each cell is 4 bytes, as each cell is u32
+        let address_bytes_count = address_cells * 4;
+        let size_bytes_count = size_cells * 4;
+        let chunk_size = address_bytes_count + size_bytes_count;
+
+        let address = &reg.data[..address_bytes_count];
+        let size = &reg.data[address_bytes_count..chunk_size];
+
+        let address = address.as_chunks().0.iter().fold(0, |value, cell| {
+            let cell = u32::from_be_bytes(*cell);
+            (value << 32) | u64::from(cell)
+        });
+
+        let size = size.as_chunks().0.iter().fold(0, |value, cell| {
+            let cell = u32::from_be_bytes(*cell);
+            (value << 32) | u64::from(cell)
+        });
+
+        MemRegion::new(address, size)
     }
 
     fn struct_bytes(&self) -> &[u8] {
@@ -281,124 +345,11 @@ impl<'a> Iterator for PropertyIter<'a> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct MemRegion {
-    pub address: u64,
-    pub size: u64,
-}
-
-impl MemRegion {
-    pub const fn new(address: u64, size: u64) -> Self {
-        Self { address, size }
-    }
-
-    pub fn get_first_mem_region(dtb: &Fdt) -> Self {
-        // these are defaults because I find it safe to assume that the address of a 64-bit computer
-        // is encoded as 64 bits, and each cell represents a 32-bit value
-        const ADDRESS_CELLS_DEFAULT: u32 = 2;
-        const SIZE_CELLS_DEFAULT: u32 = 2;
-
-        let root = dtb.root();
-
-        let mut address_cells = None;
-        let mut size_cells = None;
-
-        for prop in root.properties() {
-            let Ok(name) = dtb.name(&prop.name_offset) else {
-                println!("WARN: encountered non-UTF-8 name in the devicetree");
-                continue;
-            };
-
-            let dst = match name {
-                "#address-cells" => &mut address_cells,
-                "#size-cells" => &mut size_cells,
-                _ => continue,
-            };
-
-            // for both address cells and size cells, the data HAS to be at least 4 bytes
-            let data: [u8; 4] = core::array::from_fn(|i| prop.data[i]);
-            let cell_size_bytes = u32::from_be_bytes(data);
-            *dst = Some(cell_size_bytes);
-        }
-
-        let address_cells = address_cells.unwrap_or_else(|| {
-            println!("WARN: #address-cells not specified in device tree");
-            ADDRESS_CELLS_DEFAULT
-        }) as usize;
-
-        let size_cells = size_cells.unwrap_or_else(|| {
-            println!("WARN: #size-cells not specified in device tree");
-            SIZE_CELLS_DEFAULT
-        }) as usize;
-
-        let memory = root
-            .find("/memory")
-            .expect("devicetree should advertise at least one memory region");
-
-        let reg = memory
-            .properties()
-            .find(|p| dtb.name(&p.name_offset).is_ok_and(|e| e == "reg"))
-            .expect("the memory block is supposed to have a property with the name `reg`");
-
-        // each cell is 4 bytes, as each cell is u32
-        let address_bytes_count = address_cells * 4;
-        let size_bytes_count = size_cells * 4;
-        let chunk_size = address_bytes_count + size_bytes_count;
-
-        let address = &reg.data[..address_bytes_count];
-        let size = &reg.data[address_bytes_count..chunk_size];
-
-        let address = address.as_chunks().0.iter().fold(0, |value, cell| {
-            let cell = u32::from_be_bytes(*cell);
-            (value << 32) | u64::from(cell)
-        });
-
-        let size = size.as_chunks().0.iter().fold(0, |value, cell| {
-            let cell = u32::from_be_bytes(*cell);
-            (value << 32) | u64::from(cell)
-        });
-
-        Self::new(address, size)
-    }
-
-    pub fn find_free_region(&self, size: u64, alignment: u64, exclusions: &[Self]) -> Option<Self> {
-        if alignment == 0 {
-            return None;
-        }
-
-        if !alignment.is_power_of_two() {
-            return None; // peraps I can only accept Alignment::PageAligned or Alignment::None
-        }
-
-        let mut start = (self.address + alignment - 1) & !(alignment - 1);
-
-        loop {
-            if start + size > self.address + self.size {
-                return None;
-            }
-
-            let overlaps = exclusions.iter().any(|e| e.is_within(start, size));
-            if !overlaps {
-                return Some(Self::new(start, size));
-            }
-
-            start += alignment;
-        }
-    }
-
-    const fn is_within(&self, start: u64, size: u64) -> bool {
-        let end = start + size;
-        let region_end = self.address + self.size;
-
-        (self.address <= start && start < region_end) || (self.address <= end && end < region_end)
-    }
-}
-
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct FdtHeader {
     /// This field shall contain the value `0xd00d_feed` (big-endian).
-    pub magic: BigEndianU32<true>,
+    pub magic: FdtMagic,
     /// This field shall contain the total size in bytes of the devicetree data structure. This size
     /// shall encompass all sections of the structure: the header, the memory reservation block,
     /// structure block and strings block, as well as any free space gaps between the blocks and
@@ -499,11 +450,11 @@ impl<'a> FdtNodeReader<'a> {
 /// Represent a big endian u32 value
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub struct BigEndianU32<const HEX: bool = false> {
+pub struct BigEndianU32 {
     inner: u32,
 }
 
-impl<const HEX: bool> BigEndianU32<HEX> {
+impl BigEndianU32 {
     pub const fn new(value: u32) -> Self {
         #[cfg(target_endian = "little")]
         Self {
@@ -519,22 +470,53 @@ impl<const HEX: bool> BigEndianU32<HEX> {
     }
 }
 
-impl<const HEX: bool> core::fmt::Display for BigEndianU32<HEX> {
+impl core::fmt::Display for BigEndianU32 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        if HEX {
-            core::fmt::LowerHex::fmt(&self.get(), f)
-        } else {
-            core::fmt::Display::fmt(&self.get(), f)
-        }
+        // core::fmt::LowerHex::fmt(&self.get(), f)
+        core::fmt::Display::fmt(&self.get(), f)
     }
 }
 
-impl<const HEX: bool> core::fmt::Debug for BigEndianU32<HEX> {
+impl core::fmt::Debug for BigEndianU32 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        if HEX {
-            core::fmt::LowerHex::fmt(&self.get(), f)
-        } else {
-            core::fmt::Debug::fmt(&self.get(), f)
-        }
+        // core::fmt::LowerHex::fmt(&self.get(), f)
+        core::fmt::Debug::fmt(&self.get(), f)
+    }
+}
+
+/// Represent a FDT Header magic value
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct FdtMagic {
+    inner: BigEndianU32,
+}
+
+impl FdtMagic {
+    pub const VALID_MAGIC: Self = Self::new(BigEndianU32::new(0xd00d_feed));
+
+    pub const fn new(value: BigEndianU32) -> Self {
+        #[cfg(target_endian = "little")]
+        Self { inner: value }
+    }
+
+    pub const fn get(self) -> u32 {
+        #[cfg(target_endian = "little")]
+        self.inner.get()
+    }
+
+    pub fn is_valid(self) -> bool {
+        self == Self::VALID_MAGIC
+    }
+}
+
+impl core::fmt::Display for FdtMagic {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::LowerHex::fmt(&self.get(), f)
+    }
+}
+
+impl core::fmt::Debug for FdtMagic {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::LowerHex::fmt(&self.get(), f)
     }
 }

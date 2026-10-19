@@ -4,51 +4,36 @@
 
 use core::{fmt::Write, panic::PanicInfo};
 
-use crate::{
-    arch::sbi::Console,
-    fdt::{Fdt, MemRegion},
-};
+use crate::{arch::sbi::Console, fdt::Fdt, mem::MemRegion};
 
 mod arch;
 mod fdt;
 mod lock;
+mod mem;
 mod writer;
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn start(hart_id: usize, dtbp: *mut u8) {
+unsafe extern "C" fn start(_hart_id: usize, dtbp: *mut u8) {
     arch::trap::set_trap();
 
     let dtb: Fdt = unsafe { Fdt::from_raw_ptr(dtbp) }
         .expect("devicetree pointer should lead to a valid device tree blob");
 
     println!();
-    println!("Hello, World! hart_id={hart_id}");
+    println!("kleineOS-kernel is starting");
+    println!();
 
-    let mut mem_region = MemRegion::get_first_mem_region(&dtb);
-    // currently, the devicetree pointer in qemu is at the top end of the mem region
-    // we exclude it
-    mem_region.size = dtbp as u64 - mem_region.address;
-
-    let kernel_region = {
-        unsafe extern "C" {
-            static __kernel_start: u8;
-            static __kernel_end: u8;
-        }
-
-        let kernel_start = (&raw const __kernel_start) as u64;
-        let kernel_end = (&raw const __kernel_end) as u64;
-
-        let kernel_size = kernel_end - kernel_start;
-        MemRegion::new(kernel_start, kernel_size)
-    };
-
-    // any memory before the kernel can be considered to be reserved for the firmware
+    let mem_region = dtb.mem_region();
+    let kernel_region = MemRegion::kernel_region();
+    // Any memory before the kernel can be considered to be reserved for the firmware. I am unsure
+    // if this is a sound assumption for most hardware, but it is correct for the QEMU Virt VM
     let sbi_region = MemRegion::new(
         mem_region.address,
         kernel_region.address - mem_region.address,
     );
 
-    let r = mem_region
+    // memory region for physical page allocator
+    let phys_alloc_region = mem_region
         .find_free_region(
             0x1000 * 16, // find 16 free pages
             0x1000,      // aligned to the page size
@@ -56,11 +41,7 @@ unsafe extern "C" fn start(hart_id: usize, dtbp: *mut u8) {
         )
         .expect("should be able to find a memory region for a physical page allocator");
 
-    println!(
-        "mem region for physical page allocator: {r:x?} reserved={:#x?} total-region={:#x?}",
-        &[sbi_region, kernel_region, dtb.blob_mem_region()],
-        mem_region,
-    );
+    println!("mem region for physical page allocator: {phys_alloc_region:x?}",);
 
     loop {
         arch::wfi();
