@@ -4,13 +4,19 @@
 
 use core::{fmt::Write, panic::PanicInfo};
 
-use crate::{arch::sbi::Console, fdt::Fdt, mem::MemRegion};
+use crate::{
+    arch::sbi::Console,
+    fdt::Fdt,
+    mem::{MemRegion, phys_alloc::BitmapAlloc},
+};
 
 mod arch;
 mod fdt;
 mod lock;
 mod mem;
 mod writer;
+
+pub const PAGE_SIZE: usize = 0x1000;
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn start(_hart_id: usize, dtbp: *mut u8) {
@@ -42,6 +48,10 @@ unsafe extern "C" fn start(_hart_id: usize, dtbp: *mut u8) {
         .expect("should be able to find a memory region for a physical page allocator");
 
     println!("mem region for physical page allocator: {phys_alloc_region:x?}",);
+
+    // Safety: The memory region *should be* writable, and nothing else in this kernel code has
+    // access to it
+    unsafe { BitmapAlloc::new(phys_alloc_region) };
 
     loop {
         arch::wfi();

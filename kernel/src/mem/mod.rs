@@ -1,3 +1,5 @@
+pub mod phys_alloc;
+
 #[derive(Debug, Clone, Copy)]
 pub struct MemRegion {
     pub address: u64,
